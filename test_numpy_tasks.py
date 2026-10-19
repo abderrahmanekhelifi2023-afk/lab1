@@ -193,6 +193,27 @@ class DrawingTests(unittest.TestCase):
             [0, 0, 0, 0, 0, 0],
         ])
 
+    def test_ellipse_keeps_exact_boundary_pixels_for_radius_thirteen(self):
+        result = tasks.draw_ellipse(EllipseInput(
+            semi_axis_x=13, semi_axis_y=13, image_height=27, image_width=27,
+            shape_color=self.shape_color, background_color=self.background_color,
+        ))
+        for offset_x, offset_y in [(5, 12), (12, 5)]:
+            for sign_x in (-1, 1):
+                for sign_y in (-1, 1):
+                    x = 13 + sign_x * offset_x
+                    y = 13 + sign_y * offset_y
+                    with self.subTest(x=x, y=y):
+                        assert_array_equal(result[y, x], self.shape_color)
+        assert_array_equal(result[25, 19], self.background_color)
+
+    def test_ellipse_large_axis_avoids_integer_overflow(self):
+        result = tasks.draw_ellipse(EllipseInput(
+            semi_axis_x=10 ** 12, semi_axis_y=1, image_height=3, image_width=3,
+            shape_color=self.shape_color, background_color=self.background_color,
+        ))
+        self.assert_image_mask(result, [[0, 1, 0], [1, 1, 1], [0, 1, 0]])
+
     def test_ellipse_on_single_pixel_and_invalid_semi_axes(self):
         result = tasks.draw_ellipse(EllipseInput(
             semi_axis_x=1, semi_axis_y=1, image_height=1, image_width=1,
@@ -208,6 +229,37 @@ class DrawingTests(unittest.TestCase):
 
 
 class TimeSeriesTests(unittest.TestCase):
+    def test_integer_series_preserves_small_values_and_cancellation(self):
+        values = np.array([2 ** 54, 1, 0], dtype=np.int64)
+        result = tasks.analyze_time_series(TimeSeriesInput(values, 1))
+        assert_array_equal(result.moving_average, values.astype(float))
+        result = tasks.analyze_time_series(TimeSeriesInput([2 ** 54, -(2 ** 54), 1], 3))
+        self.assertAlmostEqual(result.mean, 1 / 3)
+        assert_allclose(result.moving_average, [1 / 3])
+        values = np.array([-(2 ** 63), 2 ** 63 - 1], dtype=np.int64)
+        result = tasks.analyze_time_series(TimeSeriesInput(values, 2))
+        self.assertEqual(result.mean, -0.5)
+        assert_array_equal(result.moving_average, [-0.5])
+        self.assertEqual(result.variance, ((2 ** 64 - 1) ** 2) / 4)
+
+    def test_large_integer_extrema_preserve_exact_comparisons_and_input(self):
+        base = 2 ** 53
+        cases = [
+            ([base, base + 1, base], [1], []),
+            ([base + 1, base, base + 1], [], [1]),
+        ]
+        for values, maxima, minima in cases:
+            with self.subTest(values=values):
+                values = np.array(values, dtype=np.int64)
+                original = values.copy()
+                result = tasks.analyze_time_series(TimeSeriesInput(values, 1))
+                assert_array_equal(result.local_maxima_indices, maxima)
+                assert_array_equal(result.local_minima_indices, minima)
+                self.assertAlmostEqual(result.variance, 2 / 9)
+                self.assertAlmostEqual(result.std, (2 / 9) ** 0.5)
+                assert_array_equal(result.moving_average, values.astype(float))
+                assert_array_equal(values, original)
+
     def test_statistics_extrema_and_moving_average(self):
         result = tasks.analyze_time_series(TimeSeriesInput([1, 3, 2, 4, 0], 3))
         self.assertIsInstance(result, TimeSeriesStatistics)

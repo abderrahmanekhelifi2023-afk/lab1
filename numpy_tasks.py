@@ -89,12 +89,19 @@ def draw_ellipse(data: EllipseInput) -> np.ndarray:
     image = np.empty((image_height, image_width, 3), dtype=np.uint8)
     image[:] = background_color
     y, x = np.ogrid[:image_height, :image_width]
-    center_x = (image_width - 1) / 2
-    center_y = (image_height - 1) / 2
-    mask = (
-        ((x - center_x) / semi_axis_x) ** 2
-        + ((y - center_y) / semi_axis_y) ** 2
-    ) <= 1
+    # Удвоенные координаты позволяют включить границу без ошибок округления.
+    dx = 2 * x - (image_width - 1)
+    dy = 2 * y - (image_height - 1)
+    axis_x_squared = int(semi_axis_x) ** 2
+    axis_y_squared = int(semi_axis_y) ** 2
+    limit = 4 * axis_x_squared * axis_y_squared
+    max_sum = (
+        (int(image_width) - 1) ** 2 * axis_y_squared
+        + (int(image_height) - 1) ** 2 * axis_x_squared
+    )
+    if max(max_sum, limit) > np.iinfo(np.int64).max:
+        dx, dy = dx.astype(object), dy.astype(object)
+    mask = dx ** 2 * axis_y_squared + dy ** 2 * axis_x_squared <= limit
     image[mask] = shape_color
     return image
 
@@ -102,7 +109,7 @@ def draw_ellipse(data: EllipseInput) -> np.ndarray:
 def analyze_time_series(data: TimeSeriesInput) -> TimeSeriesStatistics:
     """Вычислить статистики, строгие экстремумы и скользящее среднее ряда."""
     values, window = data.values, data.window
-    values = np.asarray(values, dtype=float)
+    values = np.asarray(values)
     if values.ndim != 1 or values.size == 0:
         raise ValueError("Временной ряд должен быть непустым одномерным массивом")
     if not isinstance(window, (int, np.integer)) or not 1 <= window <= values.size:
@@ -110,13 +117,29 @@ def analyze_time_series(data: TimeSeriesInput) -> TimeSeriesStatistics:
     middle = values[1:-1]
     maxima = (middle > values[:-2]) & (middle > values[2:])
     minima = (middle < values[:-2]) & (middle < values[2:])
+    if np.issubdtype(values.dtype, np.integer):
+        # Точные целые суммы предотвращают переполнение и потерю малых различий.
+        integers = values.astype(object)
+        size = values.size
+        total = integers.sum()
+        mean = float(total / size)
+        variance = float((size * (integers ** 2).sum() - total ** 2) / size ** 2)
+        cumulative = np.concatenate((np.array([0], dtype=object), np.cumsum(integers)))
+        moving_average = np.asarray(
+            (cumulative[window:] - cumulative[:-window]) / window, dtype=float
+        )
+    else:
+        numeric_values = np.asarray(values, dtype=float)
+        mean = float(numeric_values.mean())
+        variance = float(numeric_values.var())
+        moving_average = np.convolve(numeric_values, np.ones(window) / window, mode="valid")
     return TimeSeriesStatistics(
-        mean=float(values.mean()),
-        variance=float(values.var()),
-        std=float(values.std()),
+        mean=mean,
+        variance=variance,
+        std=float(np.sqrt(variance)),
         local_maxima_indices=np.flatnonzero(maxima) + 1,
         local_minima_indices=np.flatnonzero(minima) + 1,
-        moving_average=np.convolve(values, np.ones(window) / window, mode="valid"),
+        moving_average=moving_average,
     )
 
 
