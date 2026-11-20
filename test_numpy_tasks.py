@@ -43,6 +43,26 @@ class MatrixOperationsTests(unittest.TestCase):
         self.assertEqual(result.shape, (2, 1))
         assert_array_equal(result, [[0], [0]])
 
+    def test_sum_prod_promotes_narrow_integer_inputs(self):
+        data = MatrixVectorBatchInput(
+            np.array([[[100]]], dtype=np.int8),
+            np.array([[[100]]], dtype=np.int8),
+        )
+        assert_array_equal(tasks.sum_prod(data), [[10000]])
+
+    def test_sum_prod_counts_products_for_boolean_inputs(self):
+        data = MatrixVectorBatchInput(np.ones((1, 2, 2), dtype=bool), np.ones((1, 2, 1), dtype=bool))
+        assert_array_equal(tasks.sum_prod(data), [[2], [2]])
+
+    def test_sum_prod_large_integer_products_and_batch_sum_are_exact(self):
+        for matrices, vectors, expected in [
+            (np.array([[[2 ** 32]]], dtype=np.int64), np.array([[[2 ** 32]]], dtype=np.int64), 2 ** 64),
+            (np.array([[[2 ** 62]], [[2 ** 62]]], dtype=np.int64), np.ones((2, 1, 1), dtype=np.int64), 2 ** 63),
+            (np.array([[[2 ** 64 - 1]]], dtype=np.uint64), np.array([[[1]]], dtype=np.uint64), 2 ** 64 - 1),
+        ]:
+            with self.subTest(expected=expected):
+                assert_array_equal(tasks.sum_prod(MatrixVectorBatchInput(matrices, vectors)), [[expected]])
+
     def test_binarize_uses_strict_threshold_and_keeps_input(self):
         matrix = np.array([[0.2, 0.5], [0.6, -1.0]])
         original = matrix.copy()
@@ -229,6 +249,33 @@ class DrawingTests(unittest.TestCase):
 
 
 class TimeSeriesTests(unittest.TestCase):
+    def test_float_cancellation_preserves_mean_and_moving_average(self):
+        result = tasks.analyze_time_series(TimeSeriesInput([1e16, 1.0, -1e16], 3))
+        self.assertEqual(result.mean, 1 / 3)
+        assert_array_equal(result.moving_average, [1 / 3])
+
+    def test_float_variance_preserves_small_differences(self):
+        result = tasks.analyze_time_series(TimeSeriesInput([1e16, 1e16 + 2, 1e16], 1))
+        self.assertEqual(result.variance, 8 / 9)
+        self.assertEqual(result.std, (8 / 9) ** 0.5)
+
+    def test_large_float_constants_have_finite_mean_and_zero_variance(self):
+        result = tasks.analyze_time_series(TimeSeriesInput([1e308, 1e308], 2))
+        self.assertEqual(result.mean, 1e308)
+        self.assertEqual(result.variance, 0.0)
+        self.assertEqual(result.std, 0.0)
+        assert_array_equal(result.moving_average, [1e308])
+
+    def test_float_std_is_independent_of_variance_overflow_or_underflow(self):
+        for values, variance, std in [
+            ([1e308, -1e308], float("inf"), 1e308),
+            ([0.0, 1e-200], 0.0, 5e-201),
+        ]:
+            with self.subTest(values=values):
+                result = tasks.analyze_time_series(TimeSeriesInput(values, 2))
+                self.assertEqual(result.variance, variance)
+                self.assertEqual(result.std, std)
+
     def test_integer_series_preserves_small_values_and_cancellation(self):
         values = np.array([2 ** 54, 1, 0], dtype=np.int64)
         result = tasks.analyze_time_series(TimeSeriesInput(values, 1))

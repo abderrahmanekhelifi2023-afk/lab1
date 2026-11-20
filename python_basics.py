@@ -45,7 +45,8 @@ def mse(data: VectorPairInput) -> float:
     predicted, expected = data.predicted, data.expected
     if len(predicted) == 0 or len(predicted) != len(expected):
         raise ValueError("Векторы должны быть непустыми и одинаковой длины")
-    return sum((x - y) ** 2 for x, y in zip(predicted, expected)) / len(predicted)
+    # Python int сохраняет точность и для входных целых скаляров NumPy.
+    return sum((int(x) - int(y)) ** 2 for x, y in zip(predicted, expected)) / len(predicted)
 
 
 def prime_factorization(data: PositiveIntegerInput) -> str:

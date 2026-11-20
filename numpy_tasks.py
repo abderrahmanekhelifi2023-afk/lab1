@@ -1,5 +1,7 @@
 """Решения задач на NumPy."""
 
+import statistics
+
 import numpy as np
 from grader_contracts.numpy_tasks import (
     BinarizeInput, ChessInput, EllipseInput, MatrixInput, MatrixStatistics,
@@ -17,6 +19,14 @@ def sum_prod(data: MatrixVectorBatchInput) -> np.ndarray:
         raise ValueError("Матрицы должны иметь форму (p, n, n)")
     if vectors.shape != (matrices.shape[0], matrices.shape[1], 1):
         raise ValueError("Векторы должны иметь форму (p, n, 1)")
+    if matrices.dtype.kind in "biu" and vectors.dtype.kind in "biu":
+        matrix_bound = max(abs(int(matrices.min(initial=0))), abs(int(matrices.max(initial=0))))
+        vector_bound = max(abs(int(vectors.min(initial=0))), abs(int(vectors.max(initial=0))))
+        total_bound = matrix_bound * vector_bound * matrices.shape[0] * matrices.shape[1]
+        # Малые типы расширяем; при риске переполнения int64 считаем точно в Python int.
+        dtype = object if max(matrix_bound, vector_bound, total_bound) > np.iinfo(np.int64).max else np.int64
+        matrices = matrices.astype(dtype, copy=False)
+        vectors = vectors.astype(dtype, copy=False)
     return (matrices @ vectors).sum(axis=0)
 
 
@@ -128,15 +138,31 @@ def analyze_time_series(data: TimeSeriesInput) -> TimeSeriesStatistics:
         moving_average = np.asarray(
             (cumulative[window:] - cumulative[:-window]) / window, dtype=float
         )
+        std = float(np.sqrt(variance))
     else:
         numeric_values = np.asarray(values, dtype=float)
-        mean = float(numeric_values.mean())
-        variance = float(numeric_values.var())
-        moving_average = np.convolve(numeric_values, np.ones(window) / window, mode="valid")
+        if np.isfinite(numeric_values).all():
+            # statistics сохраняет малые различия и корректно усредняет большие float.
+            numbers = numeric_values.tolist()
+            mean = statistics.mean(numbers)
+            try:
+                variance = statistics.pvariance(numbers)
+            except OverflowError:
+                variance = float("inf")
+            std = statistics.pstdev(numbers)
+            moving_average = np.asarray([
+                statistics.mean(numbers[start:start + window])
+                for start in range(len(numbers) - window + 1)
+            ])
+        else:
+            mean = float(numeric_values.mean())
+            variance = float(numeric_values.var())
+            std = float(np.sqrt(variance))
+            moving_average = np.convolve(numeric_values, np.ones(window) / window, mode="valid")
     return TimeSeriesStatistics(
         mean=mean,
         variance=variance,
-        std=float(np.sqrt(variance)),
+        std=std,
         local_maxima_indices=np.flatnonzero(maxima) + 1,
         local_minima_indices=np.flatnonzero(minima) + 1,
         moving_average=moving_average,

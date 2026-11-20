@@ -2,6 +2,8 @@
 
 import unittest
 
+import numpy as np
+
 from grader_contracts.python_basics import PositiveIntegerInput, TextInput, VectorPairInput
 from python_basics import (
     count_one_bits,
@@ -64,6 +66,18 @@ class PythonBasicsTests(unittest.TestCase):
             with self.subTest(predicted=predicted, expected=expected):
                 with self.assertRaises(ValueError):
                     mse(VectorPairInput(predicted, expected))
+
+    def test_mse_numpy_integers_do_not_overflow(self):
+        cases = [
+            ([2 ** 32], [0], float(2 ** 64)),
+            ([-(2 ** 63)], [2 ** 63 - 1], float((2 ** 64 - 1) ** 2)),
+        ]
+        for predicted, expected, error in cases:
+            with self.subTest(predicted=predicted, expected=expected):
+                self.assertEqual(
+                    mse(VectorPairInput(np.array(predicted, dtype=np.int64), np.array(expected, dtype=np.int64))),
+                    error,
+                )
 
     def test_factorization_example(self):
         self.assertEqual(prime_factorization(PositiveIntegerInput(86240)), "(2**5)(5)(7**2)(11)")
